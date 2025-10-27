@@ -6,7 +6,13 @@ export const SITE_DESCRIPTION = "A modern SaaS template built with Next.js 15 an
 export const SITE_URL = getSiteUrl();
 export const GITHUB_REPO_URL = ""
 
-export const SITE_DOMAIN = new URL(SITE_URL).hostname
+export const SITE_DOMAIN = (() => {
+  try {
+    return new URL(SITE_URL).hostname;
+  } catch {
+    return "localhost";
+  }
+})();
 export const PASSWORD_RESET_TOKEN_EXPIRATION_SECONDS = 24 * 60 * 60 // 24 hours
 export const EMAIL_VERIFICATION_TOKEN_EXPIRATION_SECONDS = 24 * 60 * 60 // 24 hours
 export const MAX_SESSIONS_PER_USER = 5;

@@ -177,9 +177,9 @@ export function JobCreateForm({
       toast.success("Translation job created. We will start processing shortly.");
 
       if (jobId) {
-        router.push(`/dashboard/translations/${jobId}`);
+        router.push(`/translations/${jobId}`);
       } else {
-        router.push("/dashboard/translations");
+        router.push("/#upload");
       }
     } catch (error) {
       console.error("Failed to create translation job", error);

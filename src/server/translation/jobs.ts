@@ -79,6 +79,63 @@ export async function deleteSegmentsForJob(jobId: string) {
   await db.delete(translationSegmentTable).where(eq(translationSegmentTable.jobId, jobId));
 }
 
+export interface CancelJobResult {
+  ok: boolean;
+  reason?: "NOT_FOUND" | "FORBIDDEN" | "ALREADY_COMPLETED";
+}
+
+export async function cancelTranslationJob(
+  jobId: string,
+  userId: string,
+  teamIds: string[] = [],
+): Promise<CancelJobResult> {
+  const db = getDB();
+
+  const job = await db.query.translationJobTable.findFirst({
+    where: eq(translationJobTable.id, jobId),
+  });
+
+  if (!job) {
+    return { ok: false, reason: "NOT_FOUND" };
+  }
+
+  const isOwner = job.userId === userId;
+  const isTeamMember = !!job.teamId && teamIds.includes(job.teamId);
+
+  if (!isOwner && !isTeamMember) {
+    return { ok: false, reason: "FORBIDDEN" };
+  }
+
+  if (
+    job.status === JOB_STATUS.COMPLETED ||
+    job.status === JOB_STATUS.CANCELLED ||
+    job.status === JOB_STATUS.FAILED
+  ) {
+    return { ok: false, reason: "ALREADY_COMPLETED" };
+  }
+
+  const now = new Date();
+
+  await db
+    .update(translationJobTable)
+    .set({
+      status: JOB_STATUS.CANCELLED,
+      updatedAt: now,
+      cancelledAt: now,
+    })
+    .where(eq(translationJobTable.id, jobId));
+
+  await db.insert(translationJobEventTable).values({
+    jobId,
+    stage: job.currentStage,
+    status: JOB_STATUS.CANCELLED,
+    message: "Job cancelled by user",
+    meta: JSON.stringify({ userId }),
+  });
+
+  return { ok: true };
+}
+
 export interface ListTranslationJobsParams {
   userId: string;
   teamIds?: string[];

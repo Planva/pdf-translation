@@ -31,6 +31,10 @@ function firstEnabledLanding(): string | null {
 
 // ✅ 新增：域名收敛（把 www. 重定向到 apex 或与你 NEXT_PUBLIC_SITE_URL 一致）
 function withCanonicalHost(req: NextRequest): NextResponse | null {
+  if (process.env.NODE_ENV !== "production") {
+    return null;
+  }
+
   const url = new URL(req.url);
   const wanted = (process.env.NEXT_PUBLIC_SITE_URL ?? "").replace(/^https?:\/\//, "").replace(/\/+$/, "");
   if (!wanted) return null;
