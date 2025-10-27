@@ -2,6 +2,6 @@
 
 import { redirect } from "next/navigation";
 
-export default function TranslateRedirect() {
+export default async function TranslateRedirect() {
   redirect("/#upload");
 }
