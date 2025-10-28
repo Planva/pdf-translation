@@ -8,6 +8,7 @@ import {
   translationJobEventTable,
   translationJobTable,
   translationSegmentTable,
+  translationSegmentTranslationTable,
 } from "@/db/schema";
 import type { TranslationJob, TranslationJobEvent, TranslationJobPage } from "@/db/schema";
 
@@ -76,6 +77,9 @@ export async function createTranslationJobRecord(
 
 export async function deleteSegmentsForJob(jobId: string) {
   const db = getDB();
+  await db
+    .delete(translationSegmentTranslationTable)
+    .where(eq(translationSegmentTranslationTable.jobId, jobId));
   await db.delete(translationSegmentTable).where(eq(translationSegmentTable.jobId, jobId));
 }
 

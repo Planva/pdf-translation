@@ -227,8 +227,7 @@ Durable Object `DOQueueHandler` 负责：
 - **Cloudflare Workers**：主服务（绑定名 `pdf-translate-worker`，可沿用现有 `manga-saas` 配置并重命名）。
 - **Cloudflare D1**：至少 1 个数据库（绑定 `DB` / `NEXT_TAG_CACHE_D1`），确保导入迁移后包含前缀表。
 - **Cloudflare R2**：三个桶（源文件 `pdf-translate-source`、底图/缓存 `pdf-translate-previews`、译文 `pdf-translate-output`）。
-- **Cloudflare Queues**：翻译任务队列（绑定名 `PDF_TRANSLATE_QUEUE`）。
-- **Cloudflare Durable Objects**：`DOQueueHandler`（已在模板中声明），必要时新增 `DOTranslationCoordinator` 管理分段任务。 
+- **Cloudflare Durable Objects**：`DOQueueHandler`（已在模板中声明），后续可扩展为 `DOTranslationCoordinator` 处理并发锁与重试。队列功能在生产部署前建议启用 Cloudflare Queues，但当前代码使用 `ctx.waitUntil` 直接调度流水线，可在后续阶段接入。
 - **Cloudflare KV**：`NEXT_INC_CACHE_KV` 已存在，继续用于 ISR。
 - **Cloudflare Browser Rendering**：用于 HTML → PDF 渲染（Workers Paid 计划可启用）。
 - **外部翻译 API**：DeepL、Google Cloud Translation、OpenAI（需配置密钥与配额）。
@@ -238,3 +237,121 @@ Durable Object `DOQueueHandler` 负责：
 ---
 
 如需更多实现细节，可在 `docs/` 目录新增分阶段技术说明、API 设计或前端组件规范。
+
+## 十二、环境变量与第三方服务配置
+
+> 以下变量默认读取自 `.env`（Next.js 本地开发）与 `wrangler secrets/vars`（Cloudflare Workers 部署）。未配置的可选服务会自动跳过，对应阶段会降级到内置兜底逻辑。
+
+### 12.1 R2 / 通用配置
+
+| 变量 | 说明 |
+| --- | --- |
+| `PDF_SOURCE_BUCKET` | R2 绑定，存放上传的原始 PDF。|
+| `PDF_PREVIEW_BUCKET` | R2 绑定，存放底图、OCR JSON、HTML 预览。|
+| `PDF_OUTPUT_BUCKET` | R2 绑定，存放最终译文 PDF。|
+| `NEXT_PUBLIC_MAX_PDF_SIZE_BYTES` | （可选）限制上传体积，默认 75MB。|
+
+### 12.2 翻译引擎
+
+| 变量 | 用途 |
+| --- | --- |
+| `OPENAI_API_KEY` / `OPENAI_MODEL` | 首选引擎，适合行业术语和长文本指令。|
+| `DEEPL_API_KEY` | DeepL 官方 API，作为第二优先级。|
+| `GOOGLE_TRANSLATE_API_KEY`（或 `GOOGLE_API_KEY`） | Google 翻译兜底。|
+| `CUSTOM_TRANSLATION_ENDPOINT` / `CUSTOM_TRANSLATION_TOKEN` | 企业自建引擎（可选）。|
+
+流水线会根据 `enginePreference` 字段与上述配置自动排队尝试：OpenAI → DeepL → Google → LibreTranslate（公共实例，可按需替换 `LIBRE_TRANSLATE_URL`）。术语表会在所有结果上再次应用替换，确保术语一致。
+
+### 12.3 OCR 服务
+
+| 变量 | 用途 |
+| --- | --- |
+| `OCR_SERVICE_URL` + `OCR_SERVICE_TOKEN` | 自建 OCR 服务入口（优先使用）。|
+| `GOOGLE_VISION_API_KEY`（或 `GOOGLE_API_KEY`） | Google Vision OCR 备用实现。|
+| `AZURE_OCR_ENDPOINT` + `AZURE_OCR_KEY` | 计划支持 Azure；当前代码暂未接入，可在后续阶段扩展。|
+
+当 `ocrEnabled=true` 或自动检测为扫描件时触发 OCR。若未配置任何服务，会记录“跳过 OCR”事件，同时继续后续翻译流程。
+
+### 12.4 HTML → PDF 渲染
+
+| 变量 | 用途 |
+| --- | --- |
+| `BROWSER_RENDER_SERVICE_URL` + `BROWSER_RENDER_SERVICE_TOKEN` | 外部 Chrome/Playwright 渲染服务（可选）。|
+| `CF_BROWSER_RENDER_ACCOUNT_ID` + `CF_BROWSER_RENDER_TOKEN` | 使用 Cloudflare Browser Rendering 官方 API。|
+
+未配置上述服务时，将回退到内置 `createSimplePdf`（不保留版式，仅确保流程完整）。上线前建议至少启用其中一种，以获得高保真译文 PDF。
+
+### 12.5 其他
+
+| 变量 | 用途 |
+| --- | --- |
+| `DOCUMENT_PREPARE_SERVICE_URL` + `DOCUMENT_PREPARE_SERVICE_TOKEN` | 可选的预处理服务（生成每页底图、文字块）。未配置时由本地正则兜底。|
+| `CUSTOM_ANALYTICS_ENDPOINT` | 预留的监控/审计上报接口（目前未启用）。|
+
+## 十三、本地开发与测试流程
+
+1. **安装依赖并初始化数据库**
+   ```bash
+   npm install
+   pnpm db:migrate:dev   # 或 npm run db:migrate:dev
+   ```
+   确认 D1 本地数据库生成了 `pdf_translate_com_*` 前缀的数据表。
+
+2. **准备环境变量**
+   - 在 `.env` 中至少填写 `OPENAI_API_KEY` 或 `DEEPL_API_KEY`，以及一个 OCR Key（建议 `GOOGLE_VISION_API_KEY`）。
+   - 若需测试真 PDF 渲染，可追加 `CF_BROWSER_RENDER_ACCOUNT_ID` / `CF_BROWSER_RENDER_TOKEN`。
+
+3. **启动本地服务**
+   ```bash
+   npm run dev
+   ```
+   访问 `http://localhost:3000`，使用注册/登录流程创建账号。
+
+4. **创建翻译任务**
+   - 在首页（`/#upload`）上传 PDF，选择目标语言与行业，勾选“Enable OCR”可强制执行 OCR。 
+   - 提交后会跳转到 `/translations/[jobId]` 状态页。
+
+5. **观察流水线事件**
+   - 页面顶部的事件列表实时展示 `PREPARE → OCR → SEGMENT → TRANSLATE → LAYOUT → RENDER → PUBLISH` 进度。
+   - 若阶段失败，可在 D1 表 `pdf_translate_com_core_job_events`、`pdf_translate_com_core_jobs` 中查看详细错误。
+
+6. **验证产物**
+   - 成功后可点击 “Download translated PDF” 与 “Preview HTML” 检查结果。
+   - 同时在 R2 三个桶中验证是否生成了 source/background/preview/output 文件。
+
+7. **单元测试（规划中）**
+   即将补充针对 `pipeline.ts` 各阶段的单元测试与集成测试。当前可通过手动上传不同类型 PDF 验证结构化数据与译文。
+
+## 十四、部署与环境差异说明
+
+1. **部署命令**
+   ```bash
+   pnpm run opennext:build
+   wrangler deploy
+   ```
+   部署前请确保所有 `wrangler vars`、`wrangler secret` 已配置。
+
+2. **Cloudflare 环境变量设置**
+   ```bash
+   wrangler kv:namespace list
+   wrangler r2 bucket list
+   wrangler d1 list
+   wrangler secret put OPENAI_API_KEY
+   wrangler secret put DEEPL_API_KEY
+   wrangler secret put GOOGLE_VISION_API_KEY
+   wrangler secret put CF_BROWSER_RENDER_TOKEN
+   wrangler secret put DOCUMENT_PREPARE_SERVICE_TOKEN
+   ```
+   若需公开变量，可写入 `wrangler.jsonc` 的 `vars` 字段（非敏感数据）。
+
+3. **差异点**
+   - 生产环境建议启用 Cloudflare Queues/Durable Object 协调器以处理长时任务与重试，届时需在 `wrangler.jsonc` 中声明 `queues` 并更新 `runTranslationPipeline` 调度方式。
+   - Browser Rendering API、Vision API 等会消耗付费额度，请提前配置告警与限额。
+   - 若未开启 OCR/渲染服务，流水线会自动降级为“文本抽取 + 简单 PDF”，适合功能验证但不适合上线。
+
+---
+
+后续计划：
+- 将 Cloudflare Queues 与 Durable Object 正式接入流程，避免 `ctx.waitUntil` 的单实例瓶颈。
+- 为 `pipeline.ts` 各阶段补充单元测试与 e2e 场景脚本。
+- 在仪表盘提供实时进度推送（SSE/长轮询）与失败重试/重新排队功能。

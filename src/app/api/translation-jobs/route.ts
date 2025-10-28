@@ -5,6 +5,7 @@ import { createId } from "@paralleldrive/cuid2";
 import { JOB_STATUS, TRANSLATION_ENGINE, type TranslationJob } from "@/db/schema";
 import { createTranslationJobSchema } from "@/schemas/translation-job.schema";
 import { createTranslationJobRecord } from "@/server/translation/jobs";
+import { runTranslationPipeline } from "@/server/translation/pipeline";
 import { getSessionFromCookie } from "@/utils/auth";
 
 const DEFAULT_MAX_UPLOAD_BYTES = 75 * 1024 * 1024; // 75MB
@@ -84,7 +85,7 @@ export async function POST(req: Request) {
 
   const data = parsed.data;
 
-  const { env } = getCloudflareContext();
+  const { env, ctx } = getCloudflareContext();
 
   if (!env.PDF_SOURCE_BUCKET) {
     throw new Error("PDF_SOURCE_BUCKET binding is not configured");
@@ -133,6 +134,8 @@ export async function POST(req: Request) {
     sourceFileSize: file.size,
     sourceFileMime: contentType,
   });
+
+  ctx?.waitUntil(runTranslationPipeline(job.id));
 
   return NextResponse.json({ job: serializeJob(job) }, { status: 201 });
 }

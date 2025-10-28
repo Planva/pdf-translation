@@ -6,9 +6,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { cn } from "@/utils/cn";
 import { getSessionFromCookie } from "@/utils/auth";
 import { getTranslationJobWithRelations } from "@/server/translation/jobs";
-import { JOB_STAGE, JOB_STATUS, TRANSLATION_ENGINE } from "@/db/schema";
+import { JOB_STAGE, JOB_STATUS, TRANSLATION_ENGINE, type TranslationJob } from "@/db/schema";
 import { CancelJobButton } from "../_components/cancel-job-button";
 
 export const dynamic = "force-dynamic";
@@ -83,6 +84,57 @@ function resolveEngineLabel(engine: string | null) {
   }
 }
 
+function resolveStatusBanner(job: TranslationJob) {
+  const base = {
+    title: "",
+    description: "",
+    className: "bg-muted/40 border-border",
+  };
+
+  if (job.status === JOB_STATUS.COMPLETED) {
+    return {
+      title: "Translation completed",
+      description: "Your translated PDF is ready to download.",
+      className: "border-emerald-200 bg-emerald-50 text-emerald-900",
+    } satisfies typeof base;
+  }
+
+  if (job.status === JOB_STATUS.PROCESSING || job.status === JOB_STATUS.PREPARING) {
+    const stageLabel = stageLabels[job.currentStage] ?? "Processing";
+    return {
+      title: `Processing — ${stageLabel}`,
+      description: "We are working through the translation pipeline. You can stay on this page and the links will become active once rendering finishes.",
+      className: "border-amber-200 bg-amber-50 text-amber-900",
+    } satisfies typeof base;
+  }
+
+  if (job.status === JOB_STATUS.QUEUED) {
+    return {
+      title: "Queued",
+      description: "The task is in queue and will start soon. You can safely leave this page and return later.",
+      className: "border-sky-200 bg-sky-50 text-sky-900",
+    } satisfies typeof base;
+  }
+
+  if (job.status === JOB_STATUS.CANCELLED) {
+    return {
+      title: "Job cancelled",
+      description: "This translation was cancelled. You can create a new job if you still need a translated copy.",
+      className: "border-slate-200 bg-slate-100 text-slate-900",
+    } satisfies typeof base;
+  }
+
+  if (job.status === JOB_STATUS.FAILED) {
+    return {
+      title: "Translation failed",
+      description: job.errorMessage ?? "The pipeline reported an error. Try again or contact support if the issue persists.",
+      className: "border-destructive/40 bg-destructive/10 text-destructive",
+    } satisfies typeof base;
+  }
+
+  return null;
+}
+
 export default async function TranslationJobPublicPage({ params }: PageProps) {
   const { jobId } = params;
 
@@ -111,6 +163,7 @@ export default async function TranslationJobPublicPage({ params }: PageProps) {
 
   const recentEvents = job.events.slice(0, 6);
   const canCancel = [JOB_STATUS.QUEUED, JOB_STATUS.PREPARING, JOB_STATUS.PROCESSING].includes(job.status);
+  const statusBanner = resolveStatusBanner(job);
 
   return (
     <div className="min-h-screen bg-background">
@@ -130,6 +183,20 @@ export default async function TranslationJobPublicPage({ params }: PageProps) {
       </header>
 
       <main className="mx-auto w-full max-w-5xl px-6 py-10 space-y-8">
+        {statusBanner ? (
+          <div
+            className={cn(
+              "rounded-md border p-4 shadow-sm transition-colors",
+              statusBanner.className,
+            )}
+          >
+            <p className="text-sm font-semibold leading-6">{statusBanner.title}</p>
+            {statusBanner.description ? (
+              <p className="mt-1 text-sm leading-5 opacity-90">{statusBanner.description}</p>
+            ) : null}
+          </div>
+        ) : null}
+
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-3xl font-semibold tracking-tight">
@@ -139,7 +206,15 @@ export default async function TranslationJobPublicPage({ params }: PageProps) {
               {job.sourceFileName ?? "Uploaded document"} · {formatBytes(job.sourceFileSize)}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="default" asChild disabled={!job.outputFileKey}>
+              <Link href={`/api/translation-jobs/${job.id}/download`} prefetch={false}>Download translated PDF</Link>
+            </Button>
+            {job.previewBundleKey ? (
+              <Button variant="outline" asChild>
+                <Link href={`/api/translation-jobs/${job.id}/preview`} prefetch={false}>Preview HTML</Link>
+              </Button>
+            ) : null}
             {canCancel ? <CancelJobButton jobId={job.id} /> : null}
             <Button variant="outline" asChild>
               <Link href="/#upload">Translate another PDF</Link>
